@@ -14,7 +14,12 @@ from model_handler import AMLInference
 URI, AUTH = "bolt://localhost:7687", ("neo4j", "password123")
 driver = GraphDatabase.driver(URI, auth=AUTH)
 model = AMLInference()
-CURRENCIES = ["USD", "EUR", "GHS", "GBP", "NGN", "KES", "ZAR"]
+CURRENCIES = [
+    'Australian Dollar', 'Bitcoin', 'Brazil Real', 'Canadian Dollar',
+    'Euro', 'Mexican Peso', 'Ruble', 'Rupee', 'Saudi Riyal', 'Shekel',
+    'Swiss Franc', 'UK Pound', 'US Dollar', 'Yen', 'Yuan'
+]
+FORMATS = ['ACH', 'Bitcoin', 'Cash', 'Cheque', 'Credit Card', 'Reinvestment', 'Wire']
 BATCH_SIZE = 500
 
 @asynccontextmanager
@@ -109,7 +114,7 @@ async def upload_dataset(
         for _, row in df.iterrows():
             pay_curr = random.choice(CURRENCIES)
             rec_curr = random.choice(CURRENCIES)
-            tx_type = str(row[type_col]) if type_col and type_col in df.columns else "TRANSFER"
+            tx_type = str(row[type_col]) if type_col and type_col in df.columns else 'Wire'
             sender_stats = get_degrees(session, str(row[sender]), dataset_id)
             receiver_stats = get_degrees(session, str(row[receiver]), dataset_id)
             tx_details = {
