@@ -18,3 +18,5 @@ export const getNetwork = (account_id, dataset_id) =>
   api.get(`/account/${account_id}/network`, { params: { dataset_id } })
 export const getStats = (dataset_id) =>
   api.get('/stats', { params: { dataset_id } })
+export const getTopSuspicious = (dataset_id, threshold = 0.7) =>
+  api.get('/accounts/top-suspicious', { params: { dataset_id, threshold } })

@@ -11,57 +11,163 @@
 html,body{width:100%;height:100%;background:var(--void);overflow:hidden;cursor:none}
 #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
 canvas#bg{position:absolute;inset:0;width:100%;height:100%}
+
+/* Scanline overlay */
+#scanlines{position:absolute;inset:0;pointer-events:none;z-index:5;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px);animation:scanMove 8s linear infinite}
+@keyframes scanMove{0%{background-position:0 0}100%{background-position:0 100px}}
+
 #vignette{position:absolute;inset:0;background:radial-gradient(ellipse 70% 70% at 50% 50%,transparent 30%,rgba(2,3,5,0.7) 80%,rgba(1,2,4,0.95) 100%);pointer-events:none}
 #text-panel{position:absolute;left:6%;top:50%;transform:translateY(-50%);width:220px;z-index:10}
 .chapter-num{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:0.3em;color:var(--slate);text-transform:uppercase;margin-bottom:14px;opacity:0;transition:opacity 0.8s}
 .chapter-title{font-family:'EB Garamond',serif;font-size:28px;font-weight:300;color:var(--white);line-height:1.25;margin-bottom:12px;opacity:0;transition:opacity 0.8s}
 .chapter-body{font-family:'EB Garamond',serif;font-size:13px;font-weight:300;color:var(--slate);line-height:1.65;opacity:0;transition:opacity 0.8s}
+
+/* Stats reveal panel */
+#stats-panel{position:absolute;right:6%;top:50%;transform:translateY(-50%);width:200px;z-index:10;opacity:0;transition:opacity 1s}
+#stats-panel.show{opacity:1}
+.stat-line{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--slate);margin-bottom:16px;overflow:hidden}
+.stat-label{letter-spacing:0.2em;font-size:9px;color:var(--slate);opacity:0.6;margin-bottom:4px}
+.stat-value{font-family:'EB Garamond',serif;font-size:32px;font-weight:300;color:var(--white);overflow:hidden;white-space:nowrap}
+.stat-value.red{color:var(--red)}
+.stat-value.green{color:var(--green)}
+
 #ticks{position:absolute;bottom:32px;left:50%;transform:translateX(-50%);display:flex;gap:16px;z-index:10}
 .tick{width:24px;height:2px;background:rgba(255,255,255,0.12);transition:background 0.4s}
 .tick.active{background:var(--red)}
 .tick.done{background:rgba(255,45,90,0.25)}
 #replay{position:absolute;top:28px;right:32px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:0.15em;color:var(--red);border:1px solid rgba(255,45,90,0.5);background:rgba(255,45,90,0.06);padding:8px 20px;border-radius:20px;cursor:pointer;z-index:10;transition:background 0.2s}
 #replay:hover{background:rgba(255,45,90,0.14)}
-#enter-btn{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:0.2em;color:var(--green);border:1px solid rgba(93,202,165,0.4);background:rgba(93,202,165,0.06);padding:10px 32px;border-radius:20px;cursor:pointer;z-index:10;opacity:0;transition:opacity 0.8s,background 0.2s;pointer-events:none}
-#enter-btn.show{opacity:1;pointer-events:auto}
+
+/* Skip button */
+#skip-btn{position:absolute;top:28px;left:32px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:0.2em;color:rgba(139,160,180,0.5);border:1px solid rgba(139,160,180,0.2);background:transparent;padding:8px 16px;border-radius:20px;cursor:pointer;z-index:10;transition:all 0.2s}
+#skip-btn:hover{color:var(--slate);border-color:rgba(139,160,180,0.5)}
+
+/* Boot counter */
+#boot-counter{position:absolute;bottom:28px;right:32px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:0.2em;color:var(--slate);opacity:0.5;z-index:10}
+
+/* Enter button with pulse */
+#enter-btn{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:0.2em;color:var(--green);border:1px solid rgba(93,202,165,0.4);background:rgba(93,202,165,0.06);padding:10px 32px;border-radius:20px;cursor:pointer;z-index:10;opacity:0;transition:opacity 0.8s,background 0.2s;pointer-events:none;position:absolute}
+#enter-btn.show{opacity:1;pointer-events:auto;animation:btnPulse 2s ease-in-out infinite}
 #enter-btn:hover{background:rgba(93,202,165,0.14)}
+@keyframes btnPulse{0%,100%{box-shadow:0 0 0 0 rgba(93,202,165,0.4)}50%{box-shadow:0 0 0 12px rgba(93,202,165,0)}}
+
+/* Typing cursor */
+.cursor{display:inline-block;width:2px;height:1em;background:var(--white);vertical-align:middle;animation:blink 0.7s step-end infinite;margin-left:2px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* Glitch effect */
+.glitch{position:relative}
+.glitch::before,.glitch::after{content:attr(data-text);position:absolute;top:0;left:0;opacity:0}
+.glitching::before{animation:glitch1 0.15s step-end 3;color:var(--red);clip-path:polygon(0 0,100% 0,100% 40%,0 40%);transform:translateX(-3px)}
+.glitching::after{animation:glitch2 0.15s step-end 3;color:var(--green);clip-path:polygon(0 60%,100% 60%,100% 100%,0 100%);transform:translateX(3px)}
+@keyframes glitch1{0%,100%{opacity:0}33%{opacity:0.9;transform:translateX(-3px) skewX(-2deg)}66%{opacity:0;transform:translateX(2px)}}
+@keyframes glitch2{0%,100%{opacity:0}33%{opacity:0.9;transform:translateX(3px) skewX(2deg)}66%{opacity:0;transform:translateX(-2px)}}
 </style>
 </head>
 <body>
 <div id="stage">
   <canvas id="bg"></canvas>
+  <div id="scanlines"></div>
   <div id="vignette"></div>
+
   <div id="text-panel">
     <div class="chapter-num" id="ch-num"></div>
     <div class="chapter-title" id="ch-title"></div>
     <div class="chapter-body" id="ch-body"></div>
   </div>
+
+  <!-- Stats reveal panel (chapter 5) -->
+  <div id="stats-panel">
+    <div class="stat-line">
+      <div class="stat-label">TRANSACTIONS ANALYZED</div>
+      <div class="stat-value" id="stat-txs">0</div>
+    </div>
+    <div class="stat-line">
+      <div class="stat-label">SUSPICIOUS FLAGGED</div>
+      <div class="stat-value red" id="stat-flagged">0</div>
+    </div>
+    <div class="stat-line">
+      <div class="stat-label">LAUNDERING DETECTED</div>
+      <div class="stat-value green" id="stat-amount">$0</div>
+    </div>
+  </div>
+
   <div id="ticks">
     <div class="tick" id="t0"></div><div class="tick" id="t1"></div>
     <div class="tick" id="t2"></div><div class="tick" id="t3"></div>
     <div class="tick" id="t4"></div><div class="tick" id="t5"></div>
   </div>
+
+  <button id="skip-btn" onclick="skipToEnd()">[ SKIP ]</button>
   <button id="replay">REPLAY</button>
-  <button id="enter-btn" onclick="window.location.href='/app'">ENTER SYSTEM →</button>
+  <div id="boot-counter">SYSTEM BOOT: 00:30</div>
+  <button id="enter-btn" style="position:absolute;bottom:80px;left:50%;transform:translateX(-50%)" onclick="window.location.href='/app'">ENTER SYSTEM →</button>
 </div>
+
 <script>
 const canvas = document.getElementById('bg');
 const ctx = canvas.getContext('2d');
 let W, H, cx, cy, animId, phase = 0, phaseT = 0;
 let stars = [], particles = [], nodes = [], edges = [], rings = [], loop_progress = 0;
 let dot_pos = 0, dot_t = 0, verdict_alpha = 0;
+let bootSeconds = 30, bootInterval;
+let statsAnimating = false, statTxs = 0, statFlagged = 0, statAmount = 0;
 
 const CHAPTERS = [
   {num:'01',title:'The darkness\nbefore data',body:'Before the investigation,\nthere is only silence.\nThe network waits.'},
   {num:'02',title:'Data awakens',body:'Thousands of transactions\narrive each second.\nEach one a story.'},
   {num:'03',title:'The web\ntakes shape',body:'Accounts become nodes.\nTransfers become edges.\nA graph emerges.'},
   {num:'04',title:'The mind\nat work',body:'The neural network\npropagates through\neach connection.'},
-  {num:'05',title:'A pattern\nemerges',body:'Among 5,000 transactions,\na smurfing ring —\nhidden until now.'},
-  {num:'06',title:'The verdict',body:'Cluster 47 flagged.\nRisk score: 0.94.\nThe hunt is over.'},
+  {num:'05',title:'A pattern\nemerges',body:'Among 150,000 transactions,\na smurfing ring —\nhidden until now.'},
+  {num:'06',title:'The verdict',body:'76 accounts flagged.\nRisk score: 0.94.\nThe hunt is over.'},
 ];
 
 const LOOP = [4,5,6,7,8,4];
-const GREEN = '#5dcaa5', RED = '#ff2d5a', SLATE = 'rgba(139,160,180,', WHITE = '#f0f5fb';
+const GREEN = '#5dcaa5', RED = '#ff2d5a', WHITE = '#f0f5fb';
+
+// Typing effect
+function typeText(el, text, speed=35, cb){
+  el.innerHTML = '';
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  el.appendChild(cursor);
+  let i = 0;
+  const interval = setInterval(()=>{
+    if(i < text.length){
+      el.insertBefore(document.createTextNode(text[i]), cursor);
+      i++;
+    } else {
+      clearInterval(interval);
+      cursor.remove();
+      if(cb) cb();
+    }
+  }, speed);
+  return interval;
+}
+
+// Glitch effect
+function glitchEl(el){
+  const text = el.textContent;
+  el.setAttribute('data-text', text);
+  el.classList.add('glitch','glitching');
+  setTimeout(()=>el.classList.remove('glitching'), 500);
+}
+
+// Count up animation
+function countUp(el, target, duration, prefix='', suffix='', isFloat=false){
+  const start = performance.now();
+  const startVal = 0;
+  function update(now){
+    const t = Math.min(1,(now-start)/duration);
+    const ease = 1-Math.pow(1-t,3);
+    const val = startVal + (target-startVal)*ease;
+    if(isFloat) el.textContent = prefix + '$' + (val/1e9).toFixed(2) + 'B';
+    else el.textContent = prefix + Math.floor(val).toLocaleString() + suffix;
+    if(t<1) requestAnimationFrame(update);
+    else el.textContent = isFloat ? prefix+'$'+(target/1e9).toFixed(2)+'B' : prefix+target.toLocaleString()+suffix;
+  }
+  requestAnimationFrame(update);
+}
 
 function resize(){
   W = canvas.width = window.innerWidth;
@@ -111,15 +217,53 @@ function setChapter(c){
   const title = document.getElementById('ch-title');
   const body = document.getElementById('ch-body');
   [num,title,body].forEach(el=>el.style.opacity=0);
+
   setTimeout(()=>{
+    // Chapter number — just set it
     num.textContent = data.num;
-    title.innerHTML = data.title.replace('\n','<br>');
-    body.innerHTML = data.body.replace(/\n/g,'<br>');
-    [num,title,body].forEach(el=>el.style.opacity=1);
-  },400);
+    num.style.opacity = 1;
+
+    // Title — type it out
+    title.style.opacity = 1;
+    title.innerHTML = '';
+    const lines = data.title.split('\n');
+    typeText(title, lines[0], 40, ()=>{
+      if(lines[1]){
+        title.appendChild(document.createElement('br'));
+        const span = document.createElement('span');
+        title.appendChild(span);
+        typeText(span, lines[1], 40, ()=>{
+          // After title, fade in body
+          body.style.opacity = 1;
+          body.innerHTML = data.body.replace(/\n/g,'<br>');
+          // Glitch title on chapter 5 (verdict)
+          if(c === 5) setTimeout(()=>glitchEl(title), 800);
+        });
+      } else {
+        body.style.opacity = 1;
+        body.innerHTML = data.body.replace(/\n/g,'<br>');
+        if(c === 5) setTimeout(()=>glitchEl(title), 800);
+      }
+    });
+
+  }, 400);
+
   document.querySelectorAll('.tick').forEach((t,i)=>{
     t.className='tick'+(i<c?' done':i===c?' active':'');
   });
+
+  // Show stats panel on chapter 4
+  if(c === 4){
+    const panel = document.getElementById('stats-panel');
+    panel.classList.add('show');
+    setTimeout(()=>{
+      countUp(document.getElementById('stat-txs'), 150000, 2000);
+      setTimeout(()=>countUp(document.getElementById('stat-flagged'), 76, 1500), 600);
+      setTimeout(()=>countUp(document.getElementById('stat-amount'), 1779060719, 2000, '', '', true), 1200);
+    }, 500);
+  } else {
+    document.getElementById('stats-panel').classList.remove('show');
+  }
 }
 
 function lerp(a,b,t){return a+(b-a)*t}
@@ -159,7 +303,7 @@ function drawNodes(suspOnly=false, dimInnocent=false){
     const col = n.suspicious ? RED : GREEN;
     ctx.beginPath();
     ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
-    ctx.fillStyle=col+(alpha>0?'':`00`);
+    ctx.fillStyle=col;
     ctx.globalAlpha=alpha;
     ctx.fill();
     ctx.globalAlpha=1;
@@ -176,7 +320,7 @@ function drawNodes(suspOnly=false, dimInnocent=false){
   });
 }
 
-function drawEdges(dimInnocent=false, revealLoop=false){
+function drawEdges(dimInnocent=false){
   edges.forEach(([a,b])=>{
     const na=nodes[a],nb=nodes[b];
     if(!na||!nb||!na.born||!nb.born) return;
@@ -249,7 +393,7 @@ function drawVerdict(alpha){
   const vx=cx*1.15+Math.min(W,H)*0.2, vy=cy-30;
   ctx.globalAlpha=alpha;
   ctx.font=`500 10px 'Share Tech Mono'`;
-  ctx.fillStyle=RED; ctx.letterSpacing='0.25em';
+  ctx.fillStyle=RED;
   ctx.fillText('CLUSTER 47 · FLAGGED',vx,vy);
   ctx.beginPath(); ctx.moveTo(vx,vy+10); ctx.lineTo(vx+180,vy+10);
   ctx.strokeStyle=RED; ctx.lineWidth=0.8; ctx.stroke();
@@ -257,9 +401,27 @@ function drawVerdict(alpha){
   ctx.fillStyle=WHITE;
   ctx.fillText('0.94',vx,vy+68);
   ctx.font=`400 10px 'Share Tech Mono'`;
-  ctx.fillStyle=RED; ctx.letterSpacing='0.2em';
+  ctx.fillStyle=RED;
   ctx.fillText('RISK SCORE',vx,vy+88);
   ctx.globalAlpha=1;
+}
+
+// Boot counter
+function startBootCounter(){
+  clearInterval(bootInterval);
+  bootSeconds = 30;
+  const el = document.getElementById('boot-counter');
+  el.textContent = 'SYSTEM BOOT: 00:30';
+  bootInterval = setInterval(()=>{
+    bootSeconds--;
+    if(bootSeconds <= 0){
+      clearInterval(bootInterval);
+      el.textContent = 'SYSTEM READY';
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = `SYSTEM BOOT: 00:${String(bootSeconds).padStart(2,'0')}`;
+    }
+  }, 1000);
 }
 
 let bornCount=0, bornTimer=0;
@@ -354,12 +516,26 @@ function tick(now){
   animId=requestAnimationFrame(tick);
 }
 
+function skipToEnd(){
+  cancelAnimationFrame(animId);
+  particles=[];rings=[];dot_pos=0;verdict_alpha=0;
+  nodes.forEach(n=>{n.born=true;n.r=n.targetR;n.alpha=1;});
+  startChapter(5);
+  clearInterval(bootInterval);
+  document.getElementById('boot-counter').textContent='SYSTEM READY';
+  document.getElementById('boot-counter').style.color='var(--green)';
+  animId=requestAnimationFrame(tick);
+}
+
 function start(){
   cancelAnimationFrame(animId);
   particles=[];rings=[];dot_pos=0;verdict_alpha=0;
   bornCount=0;bornTimer=0;
   initNodes();
   document.getElementById('enter-btn').classList.remove('show');
+  document.getElementById('stats-panel').classList.remove('show');
+  document.getElementById('boot-counter').style.color='var(--slate)';
+  startBootCounter();
   startChapter(0);
   animId=requestAnimationFrame(tick);
 }

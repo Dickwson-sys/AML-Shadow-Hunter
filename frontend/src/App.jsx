@@ -5,6 +5,7 @@ import InvestigatePage from './pages/InvestigatePage'
 import './index.css'
 
 function Nav() {
+  const datasetId = sessionStorage.getItem('dataset_id') || ''
   return (
     <nav style={{
       display: 'flex', alignItems: 'center', gap: 40,
@@ -12,12 +13,16 @@ function Nav() {
       background: 'var(--bg2)', borderBottom: '1px solid var(--border)',
       position: 'sticky', top: 0, zIndex: 100
     }}>
-      <div style={{ fontFamily: 'var(--mono)', color: 'var(--accent)', fontSize: 14, letterSpacing: 3 }}>
+      <a href="/intro.html" style={{ fontFamily: 'var(--mono)', color: 'var(--accent)', fontSize: 14, letterSpacing: 3, textDecoration: 'none', cursor: 'pointer' }}>
         ◈ SHADOW<span style={{ color: 'var(--text2)' }}>HUNTER</span>
-      </div>
+      </a>
       <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-        {[['DATASETS', '/app'], ['DASHBOARD', '/app/dashboard'], ['INVESTIGATE', '/app/investigate']].map(([label, path]) => (
-          <NavLink key={path} to={path} end={path === '/app'}
+        {[
+          ['DATASETS', '/app'],
+          ['DASHBOARD', datasetId ? `/app/dashboard?dataset_id=${datasetId}` : '/app/dashboard'],
+          ['INVESTIGATE', '/app/investigate']
+        ].map(([label, path]) => (
+          <NavLink key={label} to={path} end={label === 'DATASETS'}
             style={({ isActive }) => ({
               fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2,
               padding: '6px 16px', textDecoration: 'none',

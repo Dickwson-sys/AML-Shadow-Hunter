@@ -1,7 +1,9 @@
-import os, sys, warnings
+import os, sys, warnings, time
 from datetime import datetime
 import pandas as pd
 from neo4j import GraphDatabase
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 
 warnings.filterwarnings('ignore')
 
@@ -11,24 +13,28 @@ from model_handler import AMLInference
 URI, AUTH = "bolt://localhost:7687", ("neo4j", "password123")
 BATCH_SIZE = 500
 
-COUNTRY_COORDS = {
-    'Portugal': (38.7, -9.1), 'Canada': (56.1, -106.3), 'UK': (51.5, -0.1),
-    'Germany': (52.5, 13.4), 'Spain': (40.4, -3.7), 'Brazil': (-23.5, -46.6),
-    'Mexico': (23.6, -102.5), 'Russia': (55.8, 37.6), 'Croatia': (45.8, 15.9),
-    'Japan': (35.7, 139.7), 'Italy': (41.9, 12.5), 'Israel': (31.8, 35.2),
-    'Swiss': (47.4, 8.5), 'China': (39.9, 116.4), 'India': (28.6, 77.2),
-    'Australia': (-33.9, 151.2), 'Singapore': (1.3, 103.8),
-    'Ghana': (5.6, -0.2), 'Nigeria': (6.5, 3.4), 'Kenya': (-1.3, 36.8),
-    'Cayman': (19.3, -81.4), 'Hong': (22.3, 114.2),
-}
+# Dynamic geocoder
+_geolocator = Nominatim(user_agent="aml_shadow_hunter")
+_geocode = RateLimiter(_geolocator.geocode, min_delay_seconds=1)
+_country_cache = {}
 
-def get_country_info(bank_name):
+def geocode_country(country_name: str):
+    if country_name in _country_cache:
+        return _country_cache[country_name]
+    try:
+        location = _geocode(country_name)
+        result = (location.latitude, location.longitude) if location else (0.0, 0.0)
+    except Exception:
+        result = (0.0, 0.0)
+    _country_cache[country_name] = result
+    return result
+
+def extract_country(bank_name: str) -> str:
     if not bank_name or pd.isna(bank_name):
-        return 'United States', 40.7, -74.0
+        return 'United States'
+    non_countries = {'National', 'Savings', 'Acme', 'Willows', 'Bank', 'United', 'Federal', 'Global', 'International'}
     first_word = str(bank_name).split()[0]
-    if first_word in COUNTRY_COORDS:
-        return first_word, *COUNTRY_COORDS[first_word]
-    return 'United States', 40.7, -74.0
+    return 'United States' if first_word in non_countries else first_word
 
 def load_account_map():
     path = os.path.join(os.path.dirname(__file__), 'data', 'HI-Small_accounts.csv')
@@ -38,10 +44,18 @@ def load_account_map():
     acc_df.columns = [c.strip() for c in acc_df.columns]
     bank_col = 'Bank Name' if 'Bank Name' in acc_df.columns else acc_df.columns[0]
     acct_col = 'Account Number' if 'Account Number' in acc_df.columns else acc_df.columns[2]
+
+    unique_countries = set(extract_country(b) for b in acc_df[bank_col].dropna().unique())
+    print(f"Geocoding {len(unique_countries)} unique countries...")
+    for country in unique_countries:
+        geocode_country(country)
+
     result = {}
     for _, row in acc_df.iterrows():
-        country, lat, lon = get_country_info(row[bank_col])
+        country = extract_country(row[bank_col])
+        lat, lon = _country_cache.get(country, (0.0, 0.0))
         result[str(row[acct_col]).strip()] = (country, lat, lon)
+    print(f"Loaded {len(result)} account-country mappings")
     return result
 
 def flush(session, batch, dataset_id):
@@ -76,9 +90,7 @@ def ingest(csv_path=None, nrows=150000, dataset_id="demo2025"):
     df['pay_curr'] = df['currency']
     df['rec_curr'] = df['Receiving Currency'].fillna('US Dollar') if 'Receiving Currency' in df.columns else 'US Dollar'
 
-    print("Loading account-country map...")
     account_map = load_account_map()
-    print(f"Loaded {len(account_map)} mappings")
 
     print(f"Batch scoring {len(df)} transactions...")
     model = AMLInference()
@@ -88,7 +100,7 @@ def ingest(csv_path=None, nrows=150000, dataset_id="demo2025"):
     print(f"Scoring done. {flagged} flagged.")
 
     def get_geo(uid):
-        return account_map.get(str(uid), ('United States', 40.7, -74.0))
+        return account_map.get(str(uid), ('United States', 0.0, 0.0))
 
     geo_s = df['Account'].apply(get_geo)
     geo_r = df['Account.1'].apply(get_geo)
@@ -100,7 +112,6 @@ def ingest(csv_path=None, nrows=150000, dataset_id="demo2025"):
     df['to_lon'] = [g[2] for g in geo_r]
 
     driver = GraphDatabase.driver(URI, auth=AUTH)
-
     with driver.session() as s:
         s.run("MATCH (n) WHERE n.dataset_id = $did DETACH DELETE n", did=dataset_id)
         s.run("MATCH (d:Dataset {id: $did}) DELETE d", did=dataset_id)
@@ -110,31 +121,27 @@ def ingest(csv_path=None, nrows=150000, dataset_id="demo2025"):
               ts=datetime.utcnow().isoformat())
 
     print(f"Writing {len(df)} rows to Neo4j...")
-    
-    # Create index for fast MERGE
     d = GraphDatabase.driver(URI, auth=AUTH)
     with d.session() as s:
         s.run("CREATE INDEX account_idx IF NOT EXISTS FOR (a:Account) ON (a.id, a.dataset_id)")
     d.close()
-    import time
-    time.sleep(3)  # wait for index to build
+    time.sleep(3)
     print("Index created.")
+
     for i in range(0, len(df), BATCH_SIZE):
         chunk = df.iloc[i:i + BATCH_SIZE]
-        batch_data = []
-        for _, row in chunk.iterrows():
-            batch_data.append({
-                "sender": str(row['Account']), "receiver": str(row['Account.1']),
-                "amount": row['amount'], "hour": int(row['hour']),
-                "format": str(row['format']), "currency": str(row['currency']),
-                "pay_curr": str(row['pay_curr']), "rec_curr": str(row['rec_curr']),
-                "is_fraud": bool(row.get('Is Laundering', False)),
-                "risk_score": float(row['risk_score']),
-                "from_country": row['from_country'], "to_country": row['to_country'],
-                "from_lat": float(row['from_lat']), "from_lon": float(row['from_lon']),
-                "to_lat": float(row['to_lat']), "to_lon": float(row['to_lon']),
-            })
-        # Fresh driver connection per batch
+        batch_data = [{
+            "sender": str(row['Account']), "receiver": str(row['Account.1']),
+            "amount": row['amount'], "hour": int(row['hour']),
+            "format": str(row['format']), "currency": str(row['currency']),
+            "pay_curr": str(row['pay_curr']), "rec_curr": str(row['rec_curr']),
+            "is_fraud": bool(row.get('Is Laundering', False)),
+            "risk_score": float(row['risk_score']),
+            "from_country": row['from_country'], "to_country": row['to_country'],
+            "from_lat": float(row['from_lat']), "from_lon": float(row['from_lon']),
+            "to_lat": float(row['to_lat']), "to_lon": float(row['to_lon']),
+        } for _, row in chunk.iterrows()]
+
         d = GraphDatabase.driver(URI, auth=AUTH)
         with d.session() as session:
             flush(session, batch_data, dataset_id)
@@ -145,7 +152,6 @@ def ingest(csv_path=None, nrows=150000, dataset_id="demo2025"):
     with driver.session() as s:
         s.run("MATCH (d:Dataset {id: $id}) SET d.transaction_count = $t, d.flagged_count = $f",
               id=dataset_id, t=len(df), f=flagged)
-
     driver.close()
     print(f"Done. {len(df)} transactions, {flagged} flagged. Dataset ID: {dataset_id}")
 

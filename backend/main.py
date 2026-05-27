@@ -5,6 +5,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase
 from contextlib import asynccontextmanager
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 
 warnings.filterwarnings('ignore')
 
@@ -17,47 +19,64 @@ model = AMLInference()
 
 BATCH_SIZE = 2000
 
-COUNTRY_COORDS = {
-    'Portugal': (38.7, -9.1), 'Canada': (56.1, -106.3), 'UK': (51.5, -0.1),
-    'Germany': (52.5, 13.4), 'National': (40.7, -74.0), 'Spain': (40.4, -3.7),
-    'Savings': (48.8, 2.3), 'Brazil': (-23.5, -46.6), 'Mexico': (23.6, -102.5),
-    'Russia': (55.8, 37.6), 'Acme': (40.7, -74.0), 'Croatia': (45.8, 15.9),
-    'Japan': (35.7, 139.7), 'Italy': (41.9, 12.5), 'Israel': (31.8, 35.2),
-    'Willows': (37.5, -122.0), 'Bank': (40.7, -74.0), 'United': (40.7, -74.0),
-    'Swiss': (47.4, 8.5), 'China': (39.9, 116.4), 'India': (28.6, 77.2),
-    'Australia': (-33.9, 151.2), 'Singapore': (1.3, 103.8), 'UAE': (25.2, 55.3),
-    'Ghana': (5.6, -0.2), 'Nigeria': (6.5, 3.4), 'Kenya': (-1.3, 36.8),
-    'South': (-26.2, 28.0), 'Cayman': (19.3, -81.4), 'Hong': (22.3, 114.2),
-}
+# Dynamic geocoder — no hardcoding
+_geolocator = Nominatim(user_agent="aml_shadow_hunter")
+_geocode = RateLimiter(_geolocator.geocode, min_delay_seconds=1)
+_country_cache = {}
 
-def get_country_info(bank_name: str):
+def geocode_country(country_name: str):
+    if country_name in _country_cache:
+        return _country_cache[country_name]
+    try:
+        location = _geocode(country_name)
+        if location:
+            result = (location.latitude, location.longitude)
+        else:
+            result = (0.0, 0.0)
+    except Exception:
+        result = (0.0, 0.0)
+    _country_cache[country_name] = result
+    return result
+
+def extract_country(bank_name: str) -> str:
+    """Extract country name from bank name like 'France Bank #46' -> 'France'"""
     if not bank_name or pd.isna(bank_name):
-        return 'United States', 40.7, -74.0
+        return 'United States'
+    # Known generic/non-country words
+    non_countries = {'National', 'Savings', 'Acme', 'Willows', 'Bank', 'United', 'Federal', 'Global', 'International'}
     first_word = str(bank_name).split()[0]
-    if first_word in COUNTRY_COORDS:
-        lat, lon = COUNTRY_COORDS[first_word]
-        country = first_word if first_word not in ['National', 'Savings', 'Acme', 'Willows', 'Bank', 'United'] else 'United States'
-        return country, lat, lon
-    return 'United States', 40.7, -74.0
+    return 'United States' if first_word in non_countries else first_word
 
 def load_account_map():
     account_map = {}
     accounts_path = os.path.join(os.path.dirname(__file__), 'data', 'HI-Small_accounts.csv')
-    if os.path.exists(accounts_path):
-        try:
-            acc_df = pd.read_csv(accounts_path)
-            acc_df.columns = [c.strip() for c in acc_df.columns]
-            bank_col = 'Bank Name' if 'Bank Name' in acc_df.columns else acc_df.columns[0]
-            acct_col = 'Account Number' if 'Account Number' in acc_df.columns else acc_df.columns[2]
-            for _, row in acc_df.iterrows():
-                country, lat, lon = get_country_info(row[bank_col])
-                account_map[str(row[acct_col]).strip()] = (country, lat, lon)
-        except Exception as e:
-            print(f"Warning: could not load accounts file: {e}")
+    if not os.path.exists(accounts_path):
+        return account_map
+    try:
+        acc_df = pd.read_csv(accounts_path)
+        acc_df.columns = [c.strip() for c in acc_df.columns]
+        bank_col = 'Bank Name' if 'Bank Name' in acc_df.columns else acc_df.columns[0]
+        acct_col = 'Account Number' if 'Account Number' in acc_df.columns else acc_df.columns[2]
+
+        # Get unique countries first, geocode each once
+        unique_banks = acc_df[bank_col].dropna().unique()
+        print(f"Geocoding {len(set(extract_country(b) for b in unique_banks))} unique countries...")
+        for bank in unique_banks:
+            country = extract_country(bank)
+            geocode_country(country)  # populates cache
+
+        # Build account map
+        for _, row in acc_df.iterrows():
+            country = extract_country(row[bank_col])
+            lat, lon = _country_cache.get(country, (0.0, 0.0))
+            account_map[str(row[acct_col]).strip()] = (country, lat, lon)
+
+        print(f"Loaded {len(account_map)} account-country mappings ({len(_country_cache)} countries geocoded)")
+    except Exception as e:
+        print(f"Warning: could not load accounts file: {e}")
     return account_map
 
 ACCOUNT_MAP = load_account_map()
-print(f"Loaded {len(ACCOUNT_MAP)} account-country mappings")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -126,7 +145,6 @@ async def upload_dataset(
     dataset_id = str(uuid.uuid4())[:8]
     name = dataset_name or file.filename
 
-    # Step 1: Vectorized preprocessing
     df['hour'] = pd.to_datetime(df[step], errors='coerce').dt.hour.fillna(0).astype(int)
     df['amount'] = df[amount].astype(float)
     df['format'] = df[type_col].fillna('Wire') if type_col and type_col in df.columns else 'Wire'
@@ -134,15 +152,12 @@ async def upload_dataset(
     df['pay_curr'] = df['currency']
     df['rec_curr'] = df['Receiving Currency'].fillna('US Dollar') if 'Receiving Currency' in df.columns else 'US Dollar'
 
-    # Step 2: Batch scoring — all transactions in one vectorized pass
     print(f"Batch scoring {len(df)} transactions...")
     scores = model.predict_batch(df)
     df['risk_score'] = scores
-    print(f"Scoring complete.")
 
-    # Step 3: Geo mapping
     def get_geo(uid):
-        return ACCOUNT_MAP.get(str(uid), ('United States', 40.7, -74.0))
+        return ACCOUNT_MAP.get(str(uid), ('United States', 0.0, 0.0))
 
     geo_s = df[sender].apply(get_geo)
     geo_r = df[receiver].apply(get_geo)
@@ -153,41 +168,32 @@ async def upload_dataset(
     df['to_lat'] = [g[1] for g in geo_r]
     df['to_lon'] = [g[2] for g in geo_r]
 
-    # Step 4: Create dataset node
     with driver.session() as session:
         session.run("""
             CREATE (d:Dataset {id: $id, name: $name, uploaded_at: $ts,
                                transaction_count: 0, flagged_count: 0})
         """, id=dataset_id, name=name, ts=datetime.utcnow().isoformat())
 
-    # Step 5: Write to Neo4j in fresh batch sessions
-    print(f"Writing to Neo4j...")
     for i in range(0, len(df), BATCH_SIZE):
         chunk = df.iloc[i:i + BATCH_SIZE]
-        batch_data = []
-        for _, row in chunk.iterrows():
-            batch_data.append({
-                "sender": str(row[sender]), "receiver": str(row[receiver]),
-                "amount": row['amount'], "hour": int(row['hour']),
-                "format": str(row['format']),
-                "currency": str(row['currency']),
-                "pay_curr": str(row['pay_curr']),
-                "rec_curr": str(row['rec_curr']),
-                "is_fraud": bool(row.get('Is Laundering', row.get('isFraud', False))),
-                "risk_score": float(row['risk_score']),
-                "from_country": row['from_country'], "to_country": row['to_country'],
-                "from_lat": float(row['from_lat']), "from_lon": float(row['from_lon']),
-                "to_lat": float(row['to_lat']), "to_lon": float(row['to_lon']),
-            })
+        batch_data = [{
+            "sender": str(row[sender]), "receiver": str(row[receiver]),
+            "amount": row['amount'], "hour": int(row['hour']),
+            "format": str(row['format']), "currency": str(row['currency']),
+            "pay_curr": str(row['pay_curr']), "rec_curr": str(row['rec_curr']),
+            "is_fraud": bool(row.get('Is Laundering', row.get('isFraud', False))),
+            "risk_score": float(row['risk_score']),
+            "from_country": row['from_country'], "to_country": row['to_country'],
+            "from_lat": float(row['from_lat']), "from_lon": float(row['from_lon']),
+            "to_lat": float(row['to_lat']), "to_lon": float(row['to_lon']),
+        } for _, row in chunk.iterrows()]
         with driver.session() as session:
             flush(session, batch_data, dataset_id)
 
     flagged = int((df['risk_score'] >= 0.7).sum())
     with driver.session() as session:
-        session.run("""
-            MATCH (d:Dataset {id: $id})
-            SET d.transaction_count = $total, d.flagged_count = $flagged
-        """, id=dataset_id, total=len(df), flagged=flagged)
+        session.run("MATCH (d:Dataset {id: $id}) SET d.transaction_count = $total, d.flagged_count = $flagged",
+                    id=dataset_id, total=len(df), flagged=flagged)
 
     return {"dataset_id": dataset_id, "transactions": len(df), "flagged": flagged}
 
@@ -206,6 +212,20 @@ def get_alerts(dataset_id: str, threshold: float = 0.7, limit: int = 100):
             ORDER BY r.risk_score DESC LIMIT $limit
         """, did=dataset_id, threshold=threshold, limit=limit)
         return [r.data() for r in result]
+    
+@app.get("/accounts/top-suspicious")
+def get_top_suspicious(dataset_id: str, threshold: float = 0.7, limit: int = 10):
+    with driver.session() as s:
+        result = s.run("""
+            MATCH (a:Account)-[r:TRANSFERRED]->()
+            WHERE r.dataset_id = $did AND r.risk_score >= $threshold
+            RETURN a.id AS account, count(r) AS flagged_outgoing,
+                   max(r.risk_score) AS max_risk,
+                   sum(r.amount) AS total_amount
+            ORDER BY flagged_outgoing DESC
+            LIMIT $limit
+        """, did=dataset_id, threshold=threshold, limit=limit)
+        return [r.data() for r in result]
 
 @app.get("/account/{account_id}/network")
 def get_network(account_id: str, dataset_id: str):
@@ -216,15 +236,17 @@ def get_network(account_id: str, dataset_id: str):
         """, id=account_id, did=dataset_id)
         nodes, edges = {}, []
         for record in result:
+            rel = record["r"]
+            edge_risk = rel.get("risk_score", 0)
             for node in [record["a"], record["b"]]:
                 nid = node["id"]
-                nodes[nid] = {"id": nid, "risk_score": node.get("risk_score", 0)}
-            rel = record["r"]
+                existing = nodes.get(nid, {}).get("risk_score", 0)
+                nodes[nid] = {"id": nid, "risk_score": max(existing, edge_risk)}
             edges.append({
                 "source": rel.start_node["id"],
                 "target": rel.end_node["id"],
                 "amount": rel.get("amount"),
-                "risk_score": rel.get("risk_score", 0),
+                "risk_score": edge_risk,
                 "from_country": rel.get("from_country", ""),
                 "to_country": rel.get("to_country", "")
             })
